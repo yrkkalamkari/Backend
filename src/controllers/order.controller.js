@@ -51,10 +51,14 @@ async function createOrder(req, res, next) {
     let order;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
+        const t0 = Date.now();
+        // Only select necessary product fields to reduce payload and serialization cost.
         const freshCartItems = await prisma.cartItem.findMany({
           where: { userId: req.user.id },
-          include: { product: true },
+          include: { product: { select: { id: true, name: true, price: true, discountPrice: true, stock: true } } },
         });
+        const fetchMs = Date.now() - t0;
+        console.log(`createOrder: fetched cart items in ${fetchMs}ms, count=${freshCartItems.length}`);
 
         if (freshCartItems.length === 0) return res.status(400).json({ error: "Cart is empty." });
 
@@ -85,7 +89,9 @@ async function createOrder(req, res, next) {
 
         const txTotal = txSubtotal - txDiscountAmount;
 
-        // Build the queries to run inside a single transaction.
+        // Build the queries to run inside a single transaction. Use a single raw
+        // UPDATE that decrements multiple product rows in one statement to avoid
+        // many round-trips.
         const queries = [];
 
         queries.push(
@@ -109,10 +115,20 @@ async function createOrder(req, res, next) {
           })
         );
 
-        for (const item of freshCartItems) {
-          queries.push(
-            prisma.product.update({ where: { id: item.productId }, data: { stock: { decrement: item.qty } } })
-          );
+        // Prepare VALUES list for (id, qty) pairs and parameters for the raw query
+        const valuesParams = [];
+        const valuePlaceholders = freshCartItems.map((it, i) => {
+          // for parameterized placeholders we will pass id then qty sequentially
+          valuesParams.push(it.productId, it.qty);
+          const baseIndex = i * 2 + 1;
+          return `($${baseIndex}, $${baseIndex + 1})`;
+        });
+
+        if (freshCartItems.length > 0) {
+          const sql = `UPDATE "Product" AS p SET "stock" = p."stock" - v.qty FROM (VALUES ${valuePlaceholders.join(
+            ","
+          )}) AS v(id, qty) WHERE p.id = v.id`;
+          queries.push(prisma.$executeRawUnsafe(sql, ...valuesParams));
         }
 
         if (txCoupon) {
@@ -121,7 +137,10 @@ async function createOrder(req, res, next) {
 
         queries.push(prisma.cartItem.deleteMany({ where: { userId: req.user.id } }));
 
+        const t1 = Date.now();
         const results = await prisma.$transaction(queries);
+        const txMs = Date.now() - t1;
+        console.log(`createOrder: transaction completed in ${txMs}ms`);
         // The first result is the created order
         order = results[0];
         break;

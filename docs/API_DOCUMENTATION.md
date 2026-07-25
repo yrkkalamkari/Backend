@@ -133,7 +133,7 @@ Returns the discount amount so the frontend can show it before checkout, without
 ### `POST /api/orders`
 Checkout. Builds the order from the user's current cart server-side (never trusts prices sent by the client), validates stock, applies a coupon if given, decrements stock, records the coupon usage, and clears the cart — all atomically.
 
-After the order is created, a WhatsApp message is sent to the shop owner with the order details (see `docs/WHATSAPP_SETUP.md`). This happens after the response is already sent to the customer, so a slow or failed WhatsApp send never delays or breaks checkout.
+After the order is created, a Telegram message is sent to the shop owner with the order details (see `docs/TELEGRAM_SETUP.md`). This happens after the response is already sent to the customer, so a slow or failed notification send never delays or breaks checkout.
 
 Body:
 ```json

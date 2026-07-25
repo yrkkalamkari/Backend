@@ -60,6 +60,7 @@ model Address {
   state     String
   pincode   String
   country   String   @default("India")
+  phone     String?
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
 

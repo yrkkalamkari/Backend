@@ -5,6 +5,8 @@ async function listProducts(req, res, next) {
   try {
     const { category, search, minPrice, maxPrice, sort, page = 1, limit = 20 } = req.query;
 
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=86400");
+
     const where = {
       isActive: true,
       ...(category && { category: { slug: category } }),
@@ -25,6 +27,7 @@ async function listProducts(req, res, next) {
     const orderBy =
       sort === "price_asc" ? { price: "asc" } :
       sort === "price_desc" ? { price: "desc" } :
+      sort === "newest" ? { createdAt: "desc" } :
       { createdAt: "desc" };
 
     const take = Math.min(parseInt(limit) || 20, 100);
@@ -50,6 +53,8 @@ async function listProducts(req, res, next) {
 // GET /api/products/:slug
 async function getProduct(req, res, next) {
   try {
+    res.set("Cache-Control", "public, max-age=600, stale-while-revalidate=86400");
+
     const product = await prisma.product.findUnique({
       where: { slug: req.params.slug },
       include: { images: true, category: true },
@@ -66,6 +71,8 @@ async function getProduct(req, res, next) {
 // GET /api/categories
 async function listCategories(req, res, next) {
   try {
+    res.set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+
     const categories = await prisma.category.findMany({ orderBy: { name: "asc" } });
     res.json(categories);
   } catch (err) {

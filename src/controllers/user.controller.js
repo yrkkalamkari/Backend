@@ -33,7 +33,7 @@ async function listAddresses(req, res, next) {
 // POST /api/users/me/addresses
 async function createAddress(req, res, next) {
   try {
-    const { label, line1, line2, city, state, pincode, country, isDefault } = req.body;
+    const { label, line1, line2, city, state, pincode, country, phone, isDefault } = req.body;
     if (!line1 || !city || !state || !pincode) {
       return res.status(400).json({ error: "line1, city, state, and pincode are required." });
     }
@@ -43,7 +43,7 @@ async function createAddress(req, res, next) {
     }
 
     const address = await prisma.address.create({
-      data: { userId: req.user.id, label, line1, line2, city, state, pincode, country, isDefault: !!isDefault },
+      data: { userId: req.user.id, label, line1, line2, city, state, pincode, country, phone, isDefault: !!isDefault },
     });
     res.status(201).json(address);
   } catch (err) {

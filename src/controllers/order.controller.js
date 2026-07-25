@@ -1,5 +1,5 @@
 const prisma = require("../config/db");
-const { notifyAdminOfNewOrder } = require("../services/whatsapp.service");
+const { notifyAdminOfNewOrder } = require("../services/telegram.service");
 
 // POST /api/orders  { addressId, couponCode }
 // Builds the order from the user's current cart, validates stock, applies a coupon if given,
@@ -84,7 +84,7 @@ async function createOrder(req, res, next) {
     res.status(201).json(order);
 
     // Fire-and-forget: runs after the response is already sent, so a slow or
-    // failing WhatsApp API call never delays or breaks checkout for the customer.
+    // failing Telegram API call never delays or breaks checkout for the customer.
     notifyAdminOfNewOrder(order);
   } catch (err) {
     next(err);

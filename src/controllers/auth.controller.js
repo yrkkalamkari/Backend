@@ -25,27 +25,21 @@ async function googleLogin(req, res, next) {
       return res.status(401).json({ error: "Google email is not verified." });
     }
 
-    // Find existing user by googleId, or create a new one.
-    // On repeat logins this simply returns the SAME user row, so their
-    // addresses, cart, and wishlist (all linked by userId) come right back.
-    let user = await prisma.user.findUnique({ where: { googleId: payload.sub } });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          googleId: payload.sub,
-          email: payload.email,
-          name: payload.name || payload.email.split("@")[0],
-          avatarUrl: payload.picture || null,
-        },
-      });
-    } else {
-      // Keep name/avatar fresh in case they changed it on Google's side
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { name: payload.name || user.name, avatarUrl: payload.picture || user.avatarUrl },
-      });
-    }
+// Find existing user by googleId, or create/update in a single call.
+  // This avoids an extra round trip to the database for login.
+  const user = await prisma.user.upsert({
+    where: { googleId: payload.sub },
+    update: {
+      name: payload.name || undefined,
+      avatarUrl: payload.picture || undefined,
+    },
+    create: {
+      googleId: payload.sub,
+      email: payload.email,
+      name: payload.name || payload.email.split("@")[0],
+      avatarUrl: payload.picture || null,
+    },
+  });
 
     const token = signToken(user);
 
@@ -72,10 +66,71 @@ async function getMe(req, res, next) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      include: {
-        addresses: { orderBy: { isDefault: "desc" } },
-        cartItems: { include: { product: { include: { images: true } } } },
-        wishlist: { include: { product: { include: { images: true } } } },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatarUrl: true,
+        phone: true,
+        role: true,
+        addresses: {
+          orderBy: { isDefault: "desc" },
+          select: {
+            id: true,
+            label: true,
+            line1: true,
+            line2: true,
+            city: true,
+            state: true,
+            pincode: true,
+            country: true,
+            phone: true,
+            isDefault: true,
+          },
+        },
+        cartItems: {
+          select: {
+            id: true,
+            productId: true,
+            qty: true,
+            product: {
+              select: {
+                id: true,
+                slug: true,
+                name: true,
+                price: true,
+                discountPrice: true,
+                stock: true,
+                images: {
+                  orderBy: { isPrimary: "desc" },
+                  take: 1,
+                  select: { url: true, isPrimary: true },
+                },
+              },
+            },
+          },
+        },
+        wishlist: {
+          select: {
+            id: true,
+            productId: true,
+            product: {
+              select: {
+                id: true,
+                slug: true,
+                name: true,
+                price: true,
+                discountPrice: true,
+                stock: true,
+                images: {
+                  orderBy: { isPrimary: "desc" },
+                  take: 1,
+                  select: { url: true, isPrimary: true },
+                },
+              },
+            },
+          },
+        },
       },
     });
 

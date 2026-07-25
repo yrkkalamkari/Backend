@@ -39,7 +39,15 @@ async function listProducts(req, res, next) {
         orderBy,
         take,
         skip,
-        include: { images: true, category: true },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          price: true,
+          discountPrice: true,
+          stock: true,
+          images: { select: { url: true, isPrimary: true } },
+        },
       }),
       prisma.product.count({ where }),
     ]);
@@ -57,7 +65,18 @@ async function getProduct(req, res, next) {
 
     const product = await prisma.product.findUnique({
       where: { slug: req.params.slug },
-      include: { images: true, category: true },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        price: true,
+        discountPrice: true,
+        stock: true,
+        fabricType: true,
+        category: { select: { name: true, slug: true } },
+        images: { select: { id: true, url: true, isPrimary: true } },
+      },
     });
     if (!product || !product.isActive) {
       return res.status(404).json({ error: "Product not found." });

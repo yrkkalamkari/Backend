@@ -79,7 +79,24 @@ async function deleteProduct(req, res, next) {
 async function listAllProducts(req, res, next) {
   try {
     const products = await prisma.product.findMany({
-      include: { images: true, category: true },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        price: true,
+        discountPrice: true,
+        stock: true,
+        fabricType: true,
+        categoryId: true,
+        isActive: true,
+        createdAt: true,
+        category: { select: { id: true, name: true } },
+        images: {
+          orderBy: { isPrimary: "desc" },
+          select: { id: true, url: true, isPrimary: true },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(products);
@@ -220,7 +237,22 @@ async function listCoupons(req, res, next) {
 async function listAllOrders(req, res, next) {
   try {
     const orders = await prisma.order.findMany({
-      include: { user: true, address: true, items: { include: { product: true } } },
+      select: {
+        id: true,
+        total: true,
+        status: true,
+        createdAt: true,
+        user: { select: { name: true, email: true } },
+        address: {
+          select: {
+            line1: true,
+            city: true,
+            state: true,
+            pincode: true,
+          },
+        },
+        _count: { select: { items: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(orders);

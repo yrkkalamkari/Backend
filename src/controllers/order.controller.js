@@ -9,50 +9,13 @@ async function createOrder(req, res, next) {
     const { addressId, couponCode } = req.body;
     if (!addressId) return res.status(400).json({ error: "addressId is required." });
 
-    const address = await prisma.address.findFirst({ where: { id: addressId, userId: req.user.id } });
-    if (!address) return res.status(404).json({ error: "Address not found." });
+    const address = await prisma.address.findUnique({ where: { id: addressId } });
+    if (!address || address.userId !== req.user.id) return res.status(404).json({ error: "Address not found." });
 
-    const cartItems = await prisma.cartItem.findMany({
-      where: { userId: req.user.id },
-      include: { product: true },
-    });
-    if (cartItems.length === 0) return res.status(400).json({ error: "Cart is empty." });
-
-    for (const item of cartItems) {
-      if (item.qty > item.product.stock) {
-        return res.status(400).json({ error: `Not enough stock for ${item.product.name}.` });
-      }
-    }
-
-    const subtotal = cartItems.reduce((sum, item) => {
-      const price = item.product.discountPrice ?? item.product.price;
-      return sum + Number(price) * item.qty;
-    }, 0);
-
-    let discountAmount = 0;
-    let coupon = null;
-    if (couponCode) {
-      coupon = await prisma.coupon.findUnique({ where: { code: couponCode.toUpperCase() } });
-      if (coupon && coupon.isActive && (!coupon.expiryDate || coupon.expiryDate > new Date())) {
-        discountAmount =
-          coupon.discountType === "PERCENT"
-            ? (subtotal * Number(coupon.value)) / 100
-            : Math.min(Number(coupon.value), subtotal);
-      } else {
-        coupon = null;
-      }
-    }
-
-    const total = subtotal - discountAmount;
-
-    // Use the array form of prisma.$transaction to avoid interactive TX lifecycle issues.
-    // Re-fetch latest cart items immediately before building the transaction, validate
-    // stock, then build a list of queries to execute atomically.
     let order;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const t0 = Date.now();
-        // Only select necessary product fields to reduce payload and serialization cost.
         const freshCartItems = await prisma.cartItem.findMany({
           where: { userId: req.user.id },
           include: { product: { select: { id: true, name: true, price: true, discountPrice: true, stock: true } } },
@@ -111,7 +74,10 @@ async function createOrder(req, res, next) {
                 })),
               },
             },
-            include: { items: { include: { product: true } }, address: true, user: true },
+            select: {
+              id: true,
+              total: true,
+            },
           })
         );
 
@@ -167,7 +133,12 @@ async function listMyOrders(req, res, next) {
   try {
     const orders = await prisma.order.findMany({
       where: { userId: req.user.id },
-      include: { items: { include: { product: { include: { images: true } } } }, address: true },
+      select: {
+        id: true,
+        total: true,
+        status: true,
+        createdAt: true,
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(orders);
@@ -181,7 +152,41 @@ async function getMyOrder(req, res, next) {
   try {
     const order = await prisma.order.findFirst({
       where: { id: req.params.id, userId: req.user.id },
-      include: { items: { include: { product: { include: { images: true } } } }, address: true },
+      select: {
+        id: true,
+        status: true,
+        subtotal: true,
+        discountAmount: true,
+        total: true,
+        createdAt: true,
+        address: {
+          select: {
+            id: true,
+            label: true,
+            line1: true,
+            line2: true,
+            city: true,
+            state: true,
+            pincode: true,
+            country: true,
+            phone: true,
+          },
+        },
+        items: {
+          select: {
+            id: true,
+            qty: true,
+            priceAtPurchase: true,
+            product: {
+              select: {
+                id: true,
+                name: true,
+                images: { select: { url: true, isPrimary: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!order) return res.status(404).json({ error: "Order not found." });
     res.json(order);

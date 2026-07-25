@@ -5,7 +5,19 @@ async function getWishlist(req, res, next) {
   try {
     const items = await prisma.wishlistItem.findMany({
       where: { userId: req.user.id },
-      include: { product: { include: { images: true } } },
+      include: {
+        product: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            price: true,
+            discountPrice: true,
+            stock: true,
+            images: { select: { url: true, isPrimary: true } },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(items);

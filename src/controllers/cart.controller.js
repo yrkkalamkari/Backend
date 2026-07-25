@@ -5,7 +5,19 @@ async function getCart(req, res, next) {
   try {
     const items = await prisma.cartItem.findMany({
       where: { userId: req.user.id },
-      include: { product: { include: { images: true } } },
+      include: {
+        product: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            price: true,
+            discountPrice: true,
+            stock: true,
+            images: { select: { url: true, isPrimary: true } },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(items);
@@ -21,7 +33,7 @@ async function addToCart(req, res, next) {
     const { productId, qty = 1 } = req.body;
     if (!productId) return res.status(400).json({ error: "productId is required." });
 
-    const product = await prisma.product.findUnique({ where: { id: productId } });
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { isActive: true } });
     if (!product || !product.isActive) return res.status(404).json({ error: "Product not found." });
 
     // Use an atomic upsert to avoid race conditions where two requests

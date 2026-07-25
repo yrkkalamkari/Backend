@@ -160,11 +160,16 @@ async function deleteProductImage(req, res, next) {
 // POST /api/admin/categories
 async function createCategory(req, res, next) {
   try {
-    const { name } = req.body;
+    const { name, imageUrl } = req.body;
     if (!name) return res.status(400).json({ error: "name is required." });
 
+    const slug = slugify(name, { lower: true, strict: true });
     const category = await prisma.category.create({
-      data: { name, slug: slugify(name, { lower: true, strict: true }) },
+      data: {
+        name,
+        slug,
+        imageUrl: imageUrl || null,
+      },
     });
     res.status(201).json(category);
   } catch (err) {

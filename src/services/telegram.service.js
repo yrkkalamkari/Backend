@@ -40,6 +40,11 @@ async function sendViaTelegram(message) {
     const errorText = body?.description || await res.text().catch(() => "");
     throw new Error(`Telegram API request failed (${res.status}): ${errorText}`);
   }
+
+  console.log("[telegram] notification sent successfully", {
+    chatId,
+    messageId: body.result?.message_id,
+  });
 }
 
 // Fire-and-forget by design: a Telegram failure should NEVER fail the order.

@@ -154,7 +154,9 @@ async function createOrder(req, res, next) {
 
     // Fire-and-forget: runs after the response is already sent, so a slow or
     // failing Telegram API call never delays or breaks checkout for the customer.
-    notifyAdminOfNewOrder(order);
+    setImmediate(() => {
+      void notifyAdminOfNewOrder(order);
+    });
   } catch (err) {
     next(err);
   }

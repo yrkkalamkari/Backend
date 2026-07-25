@@ -76,6 +76,12 @@ async function deleteAddress(req, res, next) {
     const existing = await prisma.address.findFirst({ where: { id, userId: req.user.id } });
     if (!existing) return res.status(404).json({ error: "Address not found." });
 
+    // Prevent deleting an address that is referenced by existing orders
+    const ordersUsing = await prisma.order.count({ where: { addressId: id } });
+    if (ordersUsing > 0) {
+      return res.status(400).json({ error: "Address cannot be deleted because it is used by existing orders." });
+    }
+
     await prisma.address.delete({ where: { id } });
     res.status(204).send();
   } catch (err) {

@@ -24,21 +24,29 @@ async function addToCart(req, res, next) {
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product || !product.isActive) return res.status(404).json({ error: "Product not found." });
 
-    const existing = await prisma.cartItem.findUnique({
+    // Use an atomic upsert to avoid race conditions where two requests
+    // try to create the same cart item simultaneously (P2002).
+    const item = await prisma.cartItem.upsert({
       where: { userId_productId: { userId: req.user.id, productId } },
+      update: { qty: { increment: qty } },
+      create: { userId: req.user.id, productId, qty },
     });
-
-    const item = existing
-      ? await prisma.cartItem.update({
-          where: { id: existing.id },
-          data: { qty: existing.qty + qty },
-        })
-      : await prisma.cartItem.create({
-          data: { userId: req.user.id, productId, qty },
-        });
 
     res.status(201).json(item);
   } catch (err) {
+    // If upsert somehow still triggers a unique constraint, try a safe update as a fallback.
+    if (err && err.code === "P2002") {
+      try {
+        const { productId, qty = 1 } = req.body;
+        const updated = await prisma.cartItem.update({
+          where: { userId_productId: { userId: req.user.id, productId } },
+          data: { qty: { increment: qty } },
+        });
+        return res.status(201).json(updated);
+      } catch (e) {
+        return next(e);
+      }
+    }
     next(err);
   }
 }

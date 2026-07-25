@@ -45,41 +45,94 @@ async function createOrder(req, res, next) {
 
     const total = subtotal - discountAmount;
 
-    const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
-        data: {
-          userId: req.user.id,
-          addressId,
-          subtotal,
-          discountAmount,
-          total,
-          couponId: coupon?.id,
-          items: {
-            create: cartItems.map((item) => ({
-              productId: item.productId,
-              qty: item.qty,
-              priceAtPurchase: item.product.discountPrice ?? item.product.price,
-            })),
-          },
-        },
-        include: { items: { include: { product: true } }, address: true, user: true },
-      });
+    // Run the order creation inside a retriable interactive transaction.
+    // Re-fetch cart items inside the transaction to ensure we operate on latest data
+    // and avoid "Transaction not found" or stale-data issues. Retry on P2028.
+    let order;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        order = await prisma.$transaction(async (tx) => {
+          const txCartItems = await tx.cartItem.findMany({
+            where: { userId: req.user.id },
+            include: { product: true },
+          });
 
-      for (const item of cartItems) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.qty } },
+          if (txCartItems.length === 0) throw { status: 400, message: "Cart is empty." };
+
+          for (const item of txCartItems) {
+            if (item.qty > item.product.stock) {
+              throw { status: 400, message: `Not enough stock for ${item.product.name}.` };
+            }
+          }
+
+          const txSubtotal = txCartItems.reduce((sum, item) => {
+            const price = item.product.discountPrice ?? item.product.price;
+            return sum + Number(price) * item.qty;
+          }, 0);
+
+          let txDiscountAmount = 0;
+          let txCoupon = null;
+          if (couponCode) {
+            txCoupon = await tx.coupon.findUnique({ where: { code: couponCode.toUpperCase() } });
+            if (
+              txCoupon &&
+              txCoupon.isActive &&
+              (!txCoupon.expiryDate || txCoupon.expiryDate > new Date())
+            ) {
+              txDiscountAmount =
+                txCoupon.discountType === "PERCENT"
+                  ? (txSubtotal * Number(txCoupon.value)) / 100
+                  : Math.min(Number(txCoupon.value), txSubtotal);
+            } else {
+              txCoupon = null;
+            }
+          }
+
+          const txTotal = txSubtotal - txDiscountAmount;
+
+          const newOrder = await tx.order.create({
+            data: {
+              userId: req.user.id,
+              addressId,
+              subtotal: txSubtotal,
+              discountAmount: txDiscountAmount,
+              total: txTotal,
+              couponId: txCoupon?.id,
+              items: {
+                create: txCartItems.map((item) => ({
+                  productId: item.productId,
+                  qty: item.qty,
+                  priceAtPurchase: item.product.discountPrice ?? item.product.price,
+                })),
+              },
+            },
+            include: { items: { include: { product: true } }, address: true, user: true },
+          });
+
+          for (const item of txCartItems) {
+            await tx.product.update({
+              where: { id: item.productId },
+              data: { stock: { decrement: item.qty } },
+            });
+          }
+
+          if (txCoupon) {
+            await tx.coupon.update({ where: { id: txCoupon.id }, data: { timesUsed: { increment: 1 } } });
+          }
+
+          await tx.cartItem.deleteMany({ where: { userId: req.user.id } });
+
+          return newOrder;
         });
+        break;
+      } catch (err) {
+        // Propagate validation errors thrown from inside the transaction as HTTP responses
+        if (err && err.status && err.message) return res.status(err.status).json({ error: err.message });
+        // Retry on transient transaction missing error
+        if (err && err.code === "P2028" && attempt < 2) continue;
+        throw err;
       }
-
-      if (coupon) {
-        await tx.coupon.update({ where: { id: coupon.id }, data: { timesUsed: { increment: 1 } } });
-      }
-
-      await tx.cartItem.deleteMany({ where: { userId: req.user.id } });
-
-      return newOrder;
-    });
+    }
 
     res.status(201).json(order);
 

@@ -45,52 +45,51 @@ async function createOrder(req, res, next) {
 
     const total = subtotal - discountAmount;
 
-    // Run the order creation inside a retriable interactive transaction.
-    // Re-fetch cart items inside the transaction to ensure we operate on latest data
-    // and avoid "Transaction not found" or stale-data issues. Retry on P2028.
+    // Use the array form of prisma.$transaction to avoid interactive TX lifecycle issues.
+    // Re-fetch latest cart items immediately before building the transaction, validate
+    // stock, then build a list of queries to execute atomically.
     let order;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        order = await prisma.$transaction(async (tx) => {
-          const txCartItems = await tx.cartItem.findMany({
-            where: { userId: req.user.id },
-            include: { product: true },
-          });
+        const freshCartItems = await prisma.cartItem.findMany({
+          where: { userId: req.user.id },
+          include: { product: true },
+        });
 
-          if (txCartItems.length === 0) throw { status: 400, message: "Cart is empty." };
+        if (freshCartItems.length === 0) return res.status(400).json({ error: "Cart is empty." });
 
-          for (const item of txCartItems) {
-            if (item.qty > item.product.stock) {
-              throw { status: 400, message: `Not enough stock for ${item.product.name}.` };
-            }
+        for (const item of freshCartItems) {
+          if (item.qty > item.product.stock) {
+            return res.status(400).json({ error: `Not enough stock for ${item.product.name}.` });
           }
+        }
 
-          const txSubtotal = txCartItems.reduce((sum, item) => {
-            const price = item.product.discountPrice ?? item.product.price;
-            return sum + Number(price) * item.qty;
-          }, 0);
+        const txSubtotal = freshCartItems.reduce((sum, item) => {
+          const price = item.product.discountPrice ?? item.product.price;
+          return sum + Number(price) * item.qty;
+        }, 0);
 
-          let txDiscountAmount = 0;
-          let txCoupon = null;
-          if (couponCode) {
-            txCoupon = await tx.coupon.findUnique({ where: { code: couponCode.toUpperCase() } });
-            if (
-              txCoupon &&
-              txCoupon.isActive &&
-              (!txCoupon.expiryDate || txCoupon.expiryDate > new Date())
-            ) {
-              txDiscountAmount =
-                txCoupon.discountType === "PERCENT"
-                  ? (txSubtotal * Number(txCoupon.value)) / 100
-                  : Math.min(Number(txCoupon.value), txSubtotal);
-            } else {
-              txCoupon = null;
-            }
+        let txDiscountAmount = 0;
+        let txCoupon = null;
+        if (couponCode) {
+          txCoupon = await prisma.coupon.findUnique({ where: { code: couponCode.toUpperCase() } });
+          if (txCoupon && txCoupon.isActive && (!txCoupon.expiryDate || txCoupon.expiryDate > new Date())) {
+            txDiscountAmount =
+              txCoupon.discountType === "PERCENT"
+                ? (txSubtotal * Number(txCoupon.value)) / 100
+                : Math.min(Number(txCoupon.value), txSubtotal);
+          } else {
+            txCoupon = null;
           }
+        }
 
-          const txTotal = txSubtotal - txDiscountAmount;
+        const txTotal = txSubtotal - txDiscountAmount;
 
-          const newOrder = await tx.order.create({
+        // Build the queries to run inside a single transaction.
+        const queries = [];
+
+        queries.push(
+          prisma.order.create({
             data: {
               userId: req.user.id,
               addressId,
@@ -99,7 +98,7 @@ async function createOrder(req, res, next) {
               total: txTotal,
               couponId: txCoupon?.id,
               items: {
-                create: txCartItems.map((item) => ({
+                create: freshCartItems.map((item) => ({
                   productId: item.productId,
                   qty: item.qty,
                   priceAtPurchase: item.product.discountPrice ?? item.product.price,
@@ -107,28 +106,26 @@ async function createOrder(req, res, next) {
               },
             },
             include: { items: { include: { product: true } }, address: true, user: true },
-          });
+          })
+        );
 
-          for (const item of txCartItems) {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { stock: { decrement: item.qty } },
-            });
-          }
+        for (const item of freshCartItems) {
+          queries.push(
+            prisma.product.update({ where: { id: item.productId }, data: { stock: { decrement: item.qty } } })
+          );
+        }
 
-          if (txCoupon) {
-            await tx.coupon.update({ where: { id: txCoupon.id }, data: { timesUsed: { increment: 1 } } });
-          }
+        if (txCoupon) {
+          queries.push(prisma.coupon.update({ where: { id: txCoupon.id }, data: { timesUsed: { increment: 1 } } }));
+        }
 
-          await tx.cartItem.deleteMany({ where: { userId: req.user.id } });
+        queries.push(prisma.cartItem.deleteMany({ where: { userId: req.user.id } }));
 
-          return newOrder;
-        });
+        const results = await prisma.$transaction(queries);
+        // The first result is the created order
+        order = results[0];
         break;
       } catch (err) {
-        // Propagate validation errors thrown from inside the transaction as HTTP responses
-        if (err && err.status && err.message) return res.status(err.status).json({ error: err.message });
-        // Retry on transient transaction missing error
         if (err && err.code === "P2028" && attempt < 2) continue;
         throw err;
       }
